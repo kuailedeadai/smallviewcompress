@@ -355,9 +355,10 @@ public class SiliCompressor {
         }else{
             Log.v(LOG_TAG, "Video conversion in progress");
         }
-
-        return MediaController.cachedFile.getPath();
-
+        if(MediaController.cachedFile !=null) {
+            return MediaController.cachedFile.getPath();
+        }
+        return "";
     }
 
 

@@ -18,7 +18,10 @@ import android.media.MediaExtractor;
 import android.media.MediaFormat;
 import android.media.MediaMetadataRetriever;
 import android.os.Build;
+import android.text.TextUtils;
 import android.util.Log;
+
+import com.duoyi.smallvideolib.YuvHelper;
 
 import java.io.File;
 import java.io.FileInputStream;
@@ -91,7 +94,6 @@ public class MediaController {
         }
     }
 
-    public native static int convertVideoFrame(ByteBuffer src, ByteBuffer dest, int destFormat, int width, int height, int padding, int swap);
 
     private void didWriteData(final boolean last, final boolean error) {
         final boolean firstWrite = videoConvertFirstWrite;
@@ -274,14 +276,22 @@ public void scheduleVideoConvert(String path, File dest) {
         }
         this.path=sourcePath;
 
+        //这里获取宽高具有兼容问题，对于18以下的Android系统无法获取到正确的值
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         retriever.setDataSource(path);
         String width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
         String height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+        //在api 17以上才能可用
         String rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
         Log.d(TAG,"VIDEO INFO = " + "width = " + width + "height = " + height + "rotation = " + rotation);
         long startTime = -1;
         long endTime = -1;
+        if(TextUtils.isEmpty(width) || TextUtils.isEmpty(height) || TextUtils.isEmpty(rotation)){
+            if(listener != null){
+                listener.error();
+            }
+            return false;
+        }
 
         int resultWidth = outWidth > 0 ? outWidth : DEFAULT_VIDEO_WIDTH;
         int resultHeight = outHeight > 0 ? outHeight : DEFAULT_VIDEO_HEIGHT;
@@ -440,7 +450,11 @@ public void scheduleVideoConvert(String path, File dest) {
                             encoder.start();
 
                             decoder = MediaCodec.createDecoderByType(inputFormat.getString(MediaFormat.KEY_MIME));
-                            outputSurface = new OutputSurface();
+                            if (Build.VERSION.SDK_INT >= 18) {
+                                outputSurface = new OutputSurface();
+                            } else {
+                                outputSurface = new OutputSurface(resultWidth, resultHeight, 0);
+                            }
 
                             //decoder data -->  outputSurface
                             decoder.configure(inputFormat, outputSurface.getSurface(), null, 0);
@@ -606,7 +620,12 @@ public void scheduleVideoConvert(String path, File dest) {
                                                     Log.e(TAG, e.getMessage());
                                                 }
                                                 if (!errorWait) {
+//                                                    EGL14 是在 Android 4.2(API 17) 引入，换言之API 17以下的版本不支持 EGL14
+//                                                    EGL10 不支持 OpenGL ES 2.x，因此在 EGL10 中某些相关常量参数只能用手写硬编码代替
+//                                                    例如 EGL14.EGL_CONTEXT_CLIENT_VERSION 以及 EGL14.EGL_OPENGL_ES2_BIT 等等
+//                                                    https://www.jianshu.com/p/a6097ad582cd
                                                     if (Build.VERSION.SDK_INT >= 18) {
+                                                        Log.d(TAG,"encoder by egl buffer");
                                                         outputSurface.drawImage(false);
                                                         inputSurface.setPresentationTime(info.presentationTimeUs * 1000);
                                                         //mediacodec and surface
@@ -615,11 +634,12 @@ public void scheduleVideoConvert(String path, File dest) {
                                                         int inputBufIndex = encoder.dequeueInputBuffer(TIMEOUT_USEC);
                                                         //meidacodec and yuv
                                                         if (inputBufIndex >= 0) {
+                                                            Log.d(TAG,"encoder by egl getreadpixel");
                                                             outputSurface.drawImage(true);
                                                             ByteBuffer rgbBuf = outputSurface.getFrame();
                                                             ByteBuffer yuvBuf = encoderInputBuffers[inputBufIndex];
                                                             yuvBuf.clear();
-                                                            convertVideoFrame(rgbBuf, yuvBuf, colorFormat, resultWidth, resultHeight, padding, swapUV);
+                                                            YuvHelper.convertVideoFrame(rgbBuf, yuvBuf, colorFormat, resultWidth, resultHeight, padding, swapUV);
                                                             encoder.queueInputBuffer(inputBufIndex, 0, bufferSize, info.presentationTimeUs, 0);
                                                         } else {
                                                             Log.d(TAG, "input buffer not available");
@@ -701,9 +721,6 @@ public void scheduleVideoConvert(String path, File dest) {
                     }
                 }
                 //end 并且返回时长
-                if(listener != null){
-                    listener.complete((System.currentTimeMillis() - time));
-                }
                 Log.e(TAG, "time = " + (System.currentTimeMillis() - time));
             }
         } else {
@@ -711,9 +728,11 @@ public void scheduleVideoConvert(String path, File dest) {
             return false;
         }
         didWriteData(true, error);
-
+        if(listener != null){
+            listener.complete((System.currentTimeMillis() - time));
+        }
         cachedFile=cacheFile;
-
+        Log.e(TAG, "time = " + (System.currentTimeMillis() - time));
 
         return true;
     }

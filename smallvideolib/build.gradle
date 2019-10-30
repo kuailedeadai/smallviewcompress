@@ -3,7 +3,11 @@ apply plugin: 'com.android.library'
 android {
     compileSdkVersion 26
     buildToolsVersion '28.0.3'
-
+    externalNativeBuild {
+        ndkBuild {
+            path 'src/main/jni/Android.mk'
+        }
+    }
 
     defaultConfig {
         minSdkVersion 16
@@ -11,6 +15,9 @@ android {
         versionCode 1
         versionName "1.0"
 
+        ndk {
+            abiFilters 'armeabi','arm64-v8a','x86','x86_64'
+        }
     }
 
     buildTypes {
