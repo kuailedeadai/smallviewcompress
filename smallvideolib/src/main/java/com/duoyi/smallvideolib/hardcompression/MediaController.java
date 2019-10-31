@@ -11,6 +11,7 @@ package com.duoyi.smallvideolib.hardcompression;
 
 import android.annotation.SuppressLint;
 import android.annotation.TargetApi;
+import android.graphics.Bitmap;
 import android.media.MediaCodec;
 import android.media.MediaCodecInfo;
 import android.media.MediaCodecList;
@@ -48,9 +49,9 @@ public class MediaController {
     private boolean videoConvertFirstWrite = true;
 
     //Default values
-    private final static int DEFAULT_VIDEO_WIDTH = 640;
-    private final static int DEFAULT_VIDEO_HEIGHT = 360;
-    private final static int DEFAULT_VIDEO_BITRATE = 450000;
+    private final static int DEFAULT_VIDEO_WIDTH = 960;
+    private final static int DEFAULT_VIDEO_HEIGHT = 540;
+    private final static int DEFAULT_VIDEO_BITRATE = 500000;
 
     public static MediaController getInstance() {
         MediaController localInstance = Instance;
@@ -261,7 +262,7 @@ public void scheduleVideoConvert(String path, File dest) {
 
     /**
      * Perform the actual video compression. Processes the frames and does the magic
-     * @param sourcePath the source uri for the file as per
+     * @param path the source uri for the file as per
      * @param destDir the destination directory where compressed video is eventually saved
      * @param outWidth the target width of the converted video, 0 is default
      * @param outHeight the target height of the converted video, 0 is default
@@ -269,51 +270,72 @@ public void scheduleVideoConvert(String path, File dest) {
      * @return
      */
     @TargetApi(16)
-    public boolean  convertVideo(final String sourcePath, File destDir, int outWidth, int outHeight, int outBitrate,CompressListener listener1) {
+    public boolean  convertVideo(final String path, File destDir, int outWidth, int outHeight, int outBitrate,CompressListener listener1) {
         listener = listener1;
         if(listener != null){
             listener.start();
         }
-        this.path=sourcePath;
-
-        //这里获取宽高具有兼容问题，对于18以下的Android系统无法获取到正确的值
         MediaMetadataRetriever retriever = new MediaMetadataRetriever();
         retriever.setDataSource(path);
-        String width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
-        String height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
-        //在api 17以上才能可用
+        Bitmap bitmap = retriever.getFrameAtTime();
+        if(listener != null){
+            listener.onFirstBitmap(bitmap);
+        }
+        String width = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_HEIGHT);
+        String height = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_WIDTH);
         String rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION);
-        Log.d(TAG,"VIDEO INFO = " + "width = " + width + "height = " + height + "rotation = " + rotation);
+
         long startTime = -1;
         long endTime = -1;
-        if(TextUtils.isEmpty(width) || TextUtils.isEmpty(height) || TextUtils.isEmpty(rotation)){
-            if(listener != null){
-                listener.error();
-            }
-            return false;
-        }
 
         int resultWidth = outWidth > 0 ? outWidth : DEFAULT_VIDEO_WIDTH;
         int resultHeight = outHeight > 0 ? outHeight : DEFAULT_VIDEO_HEIGHT;
-
-        int rotationValue = Integer.valueOf(rotation);
         int originalWidth = Integer.valueOf(width);
         int originalHeight = Integer.valueOf(height);
+        int rotationValue = 0;
+        if(TextUtils.isEmpty(rotation)){
+            if(originalWidth > originalHeight){
+                rotationValue = 0;
+            }
+        }else{
+            rotationValue = Integer.valueOf(rotation);
+        }
 
-        Log.e(TAG, "originalWidth:" + originalWidth + ", originalHeight: " + originalHeight);
+
+        Log.d(TAG, "originalWidth:" + originalWidth + ", originalHeight: " + originalHeight);
 
         int bitrate = outBitrate > 0 ? outBitrate : DEFAULT_VIDEO_BITRATE;
+        int rotateRender = 0;
 
         File cacheFile = destDir;
 
-        if(rotationValue == 90 || rotationValue == 270){
-            //输出宽高交换
+        if (Build.VERSION.SDK_INT < 18 && resultHeight > resultWidth && resultWidth != originalWidth && resultHeight != originalHeight) {
             int temp = resultHeight;
             resultHeight = resultWidth;
             resultWidth = temp;
+            rotationValue = 90;
+            rotateRender = 270;
+        } else if (Build.VERSION.SDK_INT > 20) {
+            if (rotationValue == 90) {
+                int temp = resultHeight;
+                resultHeight = resultWidth;
+                resultWidth = temp;
+                rotationValue = 0;
+                rotateRender = 270;
+            } else if (rotationValue == 180) {
+                rotateRender = 180;
+                rotationValue = 0;
+            } else if (rotationValue == 270) {
+                int temp = resultHeight;
+                resultHeight = resultWidth;
+                resultWidth = temp;
+                rotationValue = 0;
+                rotateRender = 90;
+            }
         }
 
-        Log.e(TAG, "resultWidth:" + resultWidth + ", resultHeight: " + resultHeight + "rotationValue = " + rotationValue );
+        Log.d(TAG, "resultWidth:" + resultWidth + ", resultHeight: " + resultHeight);
+
         File inputFile = new File(path);
         if (!inputFile.canRead()) {
             didWriteData(true, true);
@@ -323,28 +345,26 @@ public void scheduleVideoConvert(String path, File dest) {
         videoConvertFirstWrite = true;
         boolean error = false;
         long videoStartTime = startTime;
+
         long time = System.currentTimeMillis();
 
         if (resultWidth != 0 && resultHeight != 0) {
-            MP4Builder mediaMuxer = null;//android 合成器 aac and h264 -- mp4
-            MediaExtractor extractor = null;//android 分离器  -- >   mp4 -- aac and h264
+            MP4Builder mediaMuxer = null;
+            MediaExtractor extractor = null;
 
             try {
                 MediaCodec.BufferInfo info = new MediaCodec.BufferInfo();
-                //create mediaMuxer
                 Mp4Movie movie = new Mp4Movie();
                 movie.setCacheFile(cacheFile);
+                movie.setRotation(rotationValue);
                 movie.setSize(resultWidth, resultHeight);
                 mediaMuxer = new MP4Builder().createMovie(movie);
-                //create mediaExtractor
                 extractor = new MediaExtractor();
                 extractor.setDataSource(inputFile.toString());
 
 
                 if (resultWidth != originalWidth || resultHeight != originalHeight) {
-                    //VIDEO
                     int videoIndex;
-                    //find video track
                     videoIndex = selectTrack(extractor, false);
 
                     if (videoIndex >= 0) {
@@ -388,11 +408,11 @@ public void scheduleVideoConvert(String path, File dest) {
                                 } else if (codecName.equals("OMX.TI.DUCATI1.VIDEO.H264E")) {
                                     processorType = PROCESSOR_TYPE_TI;
                                 }
-                                Log.e("tmessages", "codec = " + codecInfo.getName() + " manufacturer = " + manufacturer + "device = " + Build.MODEL);
+                                Log.d(TAG, "codec = " + codecInfo.getName() + " manufacturer = " + manufacturer + "device = " + Build.MODEL);
                             } else {
                                 colorFormat = MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface;
                             }
-                            Log.e("tmessages", "colorFormat = " + colorFormat);
+                            Log.d(TAG, "colorFormat = " + colorFormat);
 
                             int resultHeightAligned = resultHeight;
                             int padding = 0;
@@ -451,20 +471,19 @@ public void scheduleVideoConvert(String path, File dest) {
 
                             decoder = MediaCodec.createDecoderByType(inputFormat.getString(MediaFormat.KEY_MIME));
                             if (Build.VERSION.SDK_INT >= 18) {
+                                Log.d(TAG,"eglrender");
                                 outputSurface = new OutputSurface();
                             } else {
-                                outputSurface = new OutputSurface(resultWidth, resultHeight, 0);
+                                Log.d(TAG,"getreadpixel");
+                                outputSurface = new OutputSurface(resultWidth, resultHeight, rotateRender);
                             }
-
-                            //decoder data -->  outputSurface
                             decoder.configure(inputFormat, outputSurface.getSurface(), null, 0);
                             decoder.start();
-                            //video encoder and decoder start
+
                             final int TIMEOUT_USEC = 2500;
                             ByteBuffer[] decoderInputBuffers = null;
                             ByteBuffer[] encoderOutputBuffers = null;
                             ByteBuffer[] encoderInputBuffers = null;
-                            //depends on different
                             if (Build.VERSION.SDK_INT < 21) {
                                 decoderInputBuffers = decoder.getInputBuffers();
                                 encoderOutputBuffers = encoder.getOutputBuffers();
@@ -490,9 +509,7 @@ public void scheduleVideoConvert(String path, File dest) {
                                             if (chunkSize < 0) {
                                                 decoder.queueInputBuffer(inputBufIndex, 0, 0, 0L, MediaCodec.BUFFER_FLAG_END_OF_STREAM);
                                                 inputDone = true;
-                                                //Log.d(TAG, "decode over");
                                             } else {
-                                                //Log.d(TAG, "decode data");
                                                 decoder.queueInputBuffer(inputBufIndex, 0, chunkSize, extractor.getSampleTime(), 0);
                                                 extractor.advance();
                                             }
@@ -585,7 +602,7 @@ public void scheduleVideoConvert(String path, File dest) {
 
                                         } else if (decoderStatus == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
                                             MediaFormat newFormat = decoder.getOutputFormat();
-                                            Log.d(TAG, "newFormat = " + newFormat);
+                                            Log.e(TAG, "newFormat = " + newFormat);
                                         } else if (decoderStatus < 0) {
                                             throw new RuntimeException("unexpected result from decoder.dequeueOutputBuffer: " + decoderStatus);
                                         } else {
@@ -604,7 +621,7 @@ public void scheduleVideoConvert(String path, File dest) {
                                             if (startTime > 0 && videoTime == -1) {
                                                 if (info.presentationTimeUs < startTime) {
                                                     doRender = false;
-                                                    Log.d(TAG, "drop frame startTime = " + startTime + " present time = " + info.presentationTimeUs);
+                                                    Log.e(TAG, "drop frame startTime = " + startTime + " present time = " + info.presentationTimeUs);
                                                 } else {
                                                     videoTime = info.presentationTimeUs;
                                                 }
@@ -613,28 +630,19 @@ public void scheduleVideoConvert(String path, File dest) {
                                             if (doRender) {
                                                 boolean errorWait = false;
                                                 try {
-                                                    //wait decoder data
                                                     outputSurface.awaitNewImage();
                                                 } catch (Exception e) {
                                                     errorWait = true;
                                                     Log.e(TAG, e.getMessage());
                                                 }
                                                 if (!errorWait) {
-//                                                    EGL14 是在 Android 4.2(API 17) 引入，换言之API 17以下的版本不支持 EGL14
-//                                                    EGL10 不支持 OpenGL ES 2.x，因此在 EGL10 中某些相关常量参数只能用手写硬编码代替
-//                                                    例如 EGL14.EGL_CONTEXT_CLIENT_VERSION 以及 EGL14.EGL_OPENGL_ES2_BIT 等等
-//                                                    https://www.jianshu.com/p/a6097ad582cd
                                                     if (Build.VERSION.SDK_INT >= 18) {
-                                                        Log.d(TAG,"encoder by egl buffer");
                                                         outputSurface.drawImage(false);
                                                         inputSurface.setPresentationTime(info.presentationTimeUs * 1000);
-                                                        //mediacodec and surface
                                                         inputSurface.swapBuffers();
                                                     } else {
                                                         int inputBufIndex = encoder.dequeueInputBuffer(TIMEOUT_USEC);
-                                                        //meidacodec and yuv
                                                         if (inputBufIndex >= 0) {
-                                                            Log.d(TAG,"encoder by egl getreadpixel");
                                                             outputSurface.drawImage(true);
                                                             ByteBuffer rgbBuf = outputSurface.getFrame();
                                                             ByteBuffer yuvBuf = encoderInputBuffers[inputBufIndex];
@@ -667,10 +675,10 @@ public void scheduleVideoConvert(String path, File dest) {
                                 videoStartTime = videoTime;
                             }
                         } catch (Exception e) {
+                            Log.e(TAG, e.getMessage());
                             if(listener != null){
                                 listener.error();
                             }
-                            Log.e(TAG, e.getMessage());
                             error = true;
                         }
 
@@ -692,15 +700,12 @@ public void scheduleVideoConvert(String path, File dest) {
                         }
                     }
                 } else {
-                    Log.d(TAG,"write video data");
                     long videoTime = readAndWriteTrack(extractor, mediaMuxer, info, startTime, endTime, cacheFile, false);
                     if (videoTime != -1) {
                         videoStartTime = videoTime;
                     }
                 }
                 if (!error) {
-                    //audio 没有压缩 只压缩视频 音频直接进入合成器合成
-                    Log.d(TAG,"write audio data");
                     readAndWriteTrack(extractor, mediaMuxer, info, videoStartTime, endTime, cacheFile, true);
                 }
             } catch (Exception e) {
@@ -720,19 +725,18 @@ public void scheduleVideoConvert(String path, File dest) {
                         Log.e(TAG, e.getMessage());
                     }
                 }
-                //end 并且返回时长
-                Log.e(TAG, "time = " + (System.currentTimeMillis() - time));
+                Log.d(TAG, "time = " + (System.currentTimeMillis() - time));
             }
         } else {
             didWriteData(true, true);
             return false;
         }
         didWriteData(true, error);
+
+        cachedFile=cacheFile;
         if(listener != null){
             listener.complete((System.currentTimeMillis() - time));
         }
-        cachedFile=cacheFile;
-        Log.e(TAG, "time = " + (System.currentTimeMillis() - time));
 
         return true;
     }
@@ -758,6 +762,7 @@ public void scheduleVideoConvert(String path, File dest) {
         void start();
         void complete(long costTime);
         void error();
+        void onFirstBitmap(Bitmap bitmap);
     }
 
     public CompressListener listener;

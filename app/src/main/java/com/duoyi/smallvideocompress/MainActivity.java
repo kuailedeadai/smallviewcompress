@@ -1,13 +1,12 @@
 package com.duoyi.smallvideocompress;
 
-import androidx.appcompat.app.AppCompatActivity;
-import androidx.core.app.ActivityCompat;
 
 import android.Manifest;
-import android.content.pm.PackageManager;
-import android.os.Build;
+import android.app.Activity;
+import android.graphics.Bitmap;
 import android.os.Bundle;
-import android.print.PrinterId;
+
+import android.support.v7.app.AppCompatActivity;
 import android.util.Log;
 import android.view.View;
 import android.widget.Button;
@@ -16,11 +15,11 @@ import com.duoyi.smallvideolib.SiliCompressor;
 import com.duoyi.smallvideolib.hardcompression.MediaController;
 
 import java.net.URISyntaxException;
-import java.util.concurrent.Executor;
+
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-public class MainActivity extends AppCompatActivity {
+public class MainActivity extends Activity {
 
     private static final String TAG = "MainActivity";
     private Button compress;
@@ -38,11 +37,6 @@ public class MainActivity extends AppCompatActivity {
         CrashHandler crashHandler = CrashHandler.getInstance();
         crashHandler.init(getApplicationContext());
         compress = findViewById(R.id.compress);
-        if (Build.VERSION.SDK_INT > Build.VERSION_CODES.LOLLIPOP) {
-            if (ActivityCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
-                ActivityCompat.requestPermissions(this, PERMISSIONS_STORAGE, REQUEST_PERMISSION_CODE);
-            }
-        }
         compress.setOnClickListener(new View.OnClickListener() {
             @Override
             public void onClick(View v) {
@@ -68,7 +62,7 @@ public class MainActivity extends AppCompatActivity {
      */
     private void comPressVideo(String srcPath, String outPath) throws URISyntaxException {
         String compressedFilePath = SiliCompressor.with(this)
-                .compressVideo(srcPath, outPath, 960, 540, 600000, new MediaController.CompressListener() {
+                .compressVideo(srcPath, outPath, 960, 540, 500000, new MediaController.CompressListener() {
                     @Override
                     public void start() {
                         Log.d("Mainctivity","start");
@@ -82,6 +76,11 @@ public class MainActivity extends AppCompatActivity {
                     @Override
                     public void error() {
                         Log.d("Mainctivity","error");
+                    }
+
+                    @Override
+                    public void onFirstBitmap(Bitmap bitmap) {
+
                     }
                 });
         Log.d(TAG, "compressedFilePath = " + compressedFilePath);
